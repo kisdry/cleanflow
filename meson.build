@@ -15,6 +15,7 @@ allow_experimental_apis = true
 
 sources = files(
     'cleanflow.c',
+	'lib/log_ratelimit.c',
 )
 
 executable('cleanflow', sources, dependencies: dpdk)
