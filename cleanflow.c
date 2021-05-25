@@ -3,9 +3,11 @@
 #include <inttypes.h>
 #include <signal.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/prctl.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <time.h>
@@ -20,7 +22,6 @@
 #include <rte_timer.h>
 
 #include "cleanflow.h"
-#include "lib/log_ratelimit.h"
 
 uint64_t cycles_per_sec;
 uint64_t cycles_per_ms;
@@ -39,7 +40,7 @@ static void signal_handler(int signum) {
   exiting = true;
 }
 
-static int signal_process(void) {
+static int signal_proc(void) {
   int ret = -1;
   sig_t pipe_handler;
   struct sigaction new_action;
@@ -108,19 +109,42 @@ static int time_resolution_init(void) {
   cycles_per_ms = cycles_per_sec / 1000ul;
   picosec_per_cycle = 1000ul * diff_ns / cycles;
 
-  G_LOG(NOTICE,
-        "main: cycles/second = %" PRIu64 ", cycles/millisecond = %" PRIu64
-        ", picosec/cycle = %" PRIu64 "\n",
-        cycles_per_sec, cycles_per_ms, picosec_per_cycle);
+  log_info("main: cycles/second = %" PRIu64 ", cycles/millisecond = %" PRIu64
+           ", picosec/cycle = %" PRIu64 "\n",
+           cycles_per_sec, cycles_per_ms, picosec_per_cycle);
 
   return 0;
+}
+
+int main_loop(void *arg) {
+  unsigned lcore = rte_lcore_id();
+  while (exiting == false) {
+    printf("hello,wolrd - %d\n", lcore);
+  }
+
+  return 0;
+}
+
+void corefile_init(void) {
+  struct rlimit rlim;
+  struct rlimit rlim_new;
+
+  if (getrlimit(RLIMIT_CORE, &rlim) == 0) {
+    rlim_new.rlim_cur = RLIM_INFINITY;
+    rlim_new.rlim_max = RLIM_INFINITY;
+    if (setrlimit(RLIMIT_CORE, &rlim_new) != 0) {
+      rlim_new.rlim_cur = rlim_new.rlim_max = rlim.rlim_max;
+      (void)setrlimit(RLIMIT_CORE, &rlim_new);
+    }
+  }
+  return;
 }
 
 int main(int argc, char **argv) {
 
   int ret;
 
-  rte_log_register("cleanflow");
+  corefile_init();
 
   RTE_VERIFY(prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0) == 0);
 
@@ -133,9 +157,9 @@ int main(int argc, char **argv) {
 
   rte_timer_subsystem_init();
 
-  ret = signal_process();
+  ret = signal_proc();
   if (ret < 0) {
-    rte_exit(EXIT_FAILURE, "error: signal_process failed.");
+    rte_exit(EXIT_FAILURE, "error: signal_proc failed.");
     return ret;
   }
 
@@ -144,10 +168,7 @@ int main(int argc, char **argv) {
     return ret;
   }
 
-  while (likely(!exiting)) {
-  }
-
-  rte_eal_mp_wait_lcore();
+  rte_eal_mp_remote_launch(main_loop, NULL, CALL_MAIN);
 
   return ret;
 }
